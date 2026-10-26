@@ -46,12 +46,15 @@ is_valid_origin() {
 
 read_env_value() {
   local key="$1" file="$2" line value
-  line="$(grep -E "^${key}=" "$file" | tail -n 1 || true)"
+  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$file" | tail -n 1 || true)"
   value="${line#*=}"
+  value="${value//$'\r'/}"
   value="${value%\"}"
   value="${value#\"}"
   value="${value%\'}"
   value="${value#\'}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
   printf '%s' "$value"
 }
 
@@ -92,9 +95,10 @@ require_storage_class() {
 load_env() {
   [[ -f "$ENV_FILE" ]] || die "Thiếu $ENV_FILE — copy từ app-secrets.env.example và đặt PUBLIC_ORIGIN"
   PUBLIC_ORIGIN="$(read_env_value PUBLIC_ORIGIN "$ENV_FILE")"
+  PUBLIC_ORIGIN="${PUBLIC_ORIGIN%/}"
   SESSION_SECRET="$(read_env_value SESSION_SECRET "$ENV_FILE")"
   is_valid_origin "$PUBLIC_ORIGIN" \
-    || die "PUBLIC_ORIGIN phải là origin HTTPS thật, dạng https://host, không path. Sửa $ENV_FILE"
+    || die "PUBLIC_ORIGIN phải là origin HTTPS thật, dạng https://host, không path. Giá trị đọc được: $(printf '%q' "$PUBLIC_ORIGIN"). Sửa $ENV_FILE"
   if is_placeholder_secret "$SESSION_SECRET"; then
     SESSION_SECRET="$(openssl rand -hex "$SESSION_SECRET_RAND_BYTES")"
     umask 077

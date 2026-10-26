@@ -30,6 +30,10 @@ set -a
 . "$SRC"
 set +a
 
+SESSION_SECRET="${SESSION_SECRET//$'\r'/}"
+PUBLIC_ORIGIN="${PUBLIC_ORIGIN//$'\r'/}"
+PUBLIC_ORIGIN="${PUBLIC_ORIGIN%/}"
+
 : "${SESSION_SECRET:?SESSION_SECRET rỗng}"
 : "${PUBLIC_ORIGIN:?PUBLIC_ORIGIN rỗng}"
 
@@ -38,7 +42,7 @@ if [[ "$SESSION_SECRET" == *REPLACE_WITH* || "$SESSION_SECRET" == *" "* ]]; then
   exit 1
 fi
 if [[ ! "$PUBLIC_ORIGIN" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ || "$PUBLIC_ORIGIN" == *example.com* ]]; then
-  echo "PUBLIC_ORIGIN phải là origin HTTPS thật, dạng https://host, không path"
+  printf 'PUBLIC_ORIGIN phải là origin HTTPS thật, dạng https://host, không path. Giá trị đọc được: %q\n' "$PUBLIC_ORIGIN"
   exit 1
 fi
 

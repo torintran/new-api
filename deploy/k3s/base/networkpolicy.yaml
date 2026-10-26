@@ -22,6 +22,8 @@ spec:
           port: 53
     # Fallback cho CNI enforce policy trước khi DNAT Service IP.
     # k3s mặc định service CIDR là 10.43.0.0/16; đổi cluster-cidr thì sửa ở đây.
+    # Cổng 8083 là gemini-web2api. Không có dòng này, dial tới ClusterIP bị RST
+    # (connection refused). Đổi cổng upstream thì sửa số này.
     - to:
         - ipBlock:
             cidr: 10.43.0.0/16
@@ -30,6 +32,16 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+        - protocol: TCP
+          port: 8083
+    # Sau DNAT, đích là pod IP trong namespace gemini, không còn là ClusterIP.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: gemini
+      ports:
+        - protocol: TCP
+          port: 8083
     # Upstream model API trên Internet.
     # Chặn private/link-local để giảm SSRF vào metadata cloud và mạng nội bộ.
     # Policy này CHỈ áp cho pod app; cloudflared ở namespace cloudflare không bị ảnh hưởng.

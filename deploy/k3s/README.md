@@ -355,6 +355,36 @@ Xoá namespace là xoá PVC. Backup trước.
 | Pod OOMKilled | Request lớn, nhiều stream | Tăng memory limit trong Deployment |
 | PVC Pending | Thiếu StorageClass `local-path` | `kubectl get sc` |
 | Cảnh báo `TRUSTED_PROXIES` lúc boot | Chưa set biến, app tin RFC1918 | Đúng với cloudflared trong cluster. Đừng đặt `none` nếu cần IP client |
+| `dial tcp 10.43.x.x:8083: connect: connection refused` khi test kênh | NetworkPolicy của pod `new-api` chặn Service IP | Mục dưới. Pod curl không mang label app không chứng minh pod app đi được |
+
+### Kênh trong cluster: connection refused tới gemini-web2api
+
+Base URL đúng là `http://gemini-web2api.gemini.svc.cluster.local:8083`, không thêm `/v1`. Log test kênh dạng:
+
+```text
+Post "http://gemini-web2api.gemini.svc.cluster.local:8083/v1/chat/completions": dial tcp 10.43.95.20:8083: connect: connection refused
+```
+
+DNS đã ra ClusterIP. `connection refused` là RST ở TCP, không phải sai key. `new-api-egress` chỉ cho dải `10.43.0.0/16` mở cổng 53, và rule Internet loại cả `10.0.0.0/8`. Trên k3s, gói bị policy chặn trả RST.
+
+Pod `curl` tạo bằng `kubectl run` không có label `app.kubernetes.io/name: new-api`, nên policy không áp vào nó. `curl` ra HTTP 200 không có nghĩa pod new-api nối được.
+
+Kiểm tra:
+
+```bash
+kubectl -n gemini get endpoints gemini-web2api -o wide
+kubectl get networkpolicy -n new-api
+```
+
+Endpoints phải có IP pod. Policy `new-api-egress` phải cho TCP `8083` tới `10.43.0.0/16` và namespace `gemini`.
+
+Áp manifest đã sửa rồi test lại kênh trong console, model `gemini-3.6-flash`:
+
+```bash
+kubectl apply -k deploy/k3s/overlays/prod
+```
+
+Lần thất bại sau đó, nếu còn, log sẽ là lỗi key, model hoặc cookie, không còn `connection refused`.
 
 ## 8. Checklist
 

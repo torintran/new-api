@@ -47,26 +47,62 @@ deploy/k3s/
 kubectl apply -k deploy/k3s/overlays/prod
 ```
 
-## Image
+## Build & push image của bạn (làm một lần)
 
-Overlay pin image của fork:
+Workflow `.github/workflows/docker-ghcr.yml` (**Publish Docker image (GHCR)**) build multi-arch (amd64 + arm64) và đẩy lên GHCR của repo đang chạy. Trên fork này đích là `ghcr.io/torintran/new-api`. Không cần Docker trên máy.
+
+Push lên `main` hoặc tag `v*` là workflow chạy. Bấm tay cũng được: **Actions → Publish Docker image (GHCR) → Run workflow**.
+
+Hai mục **Publish Docker image (Multi-arch)** và **Publish Docker image (manual branch)** đẩy lên Docker Hub `calciumion/new-api` và cần secret của project gốc. Không chạy chúng.
+
+Kết quả mong đợi:
 
 ```text
-ghcr.io/torintran/new-api:latest
+ghcr.io/torintran/new-api:v1.0.0        # từ git tag v* mới, do bạn tạo
+ghcr.io/torintran/new-api:main          # từ nhánh main
+ghcr.io/torintran/new-api:latest        # từ main, hoặc từ tag v*
 ```
 
-Workflow `docker-build.yml` trong repo đẩy lên Docker Hub `calciumion/new-api` và cần secret của project gốc, nên fork không có image từ workflow đó. Package GHCR này chưa tồn tại cho đến khi bạn tự build và push.
+Overlay đang pin `latest`. Tag `v1.0.0` trong ví dụ chỉ là tên tag mới; đừng push lại tag upstream đã có sẵn (ví dụ `v1.0.0-rc.47`) vì Git không tạo lại tag cũ và workflow không chạy.
+
+File workflow phải nằm trên `main` thì nút **Run workflow** mới hiện.
+
+### Bước 1 — bật Actions cho fork
+
+Fork mặc định tắt Actions cho đến khi bạn bật.
+
+GitHub → repo `torintran/new-api` → tab **Actions** → bấm **I understand my workflows, go ahead and enable them**.
+
+Nếu tab đã liệt kê workflow thì Actions đang bật, bỏ qua bước này.
+
+### Bước 2 — trigger build
+
+Commit và push `.github/workflows/docker-ghcr.yml` lên `main` trước. Push đó đã kích hoạt build và ra tag `main` + `latest`.
+
+Muốn thêm một tag bất biến:
 
 ```bash
-echo "$GHCR_PAT" | docker login ghcr.io -u torintran --password-stdin
-
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/torintran/new-api:latest \
-  --push .
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
-PAT cần scope `write:packages` + `read:packages`. Package mới trên GHCR mặc định private. Để public, hoặc tạo pull secret rồi thêm vào `base/deployment.yaml`:
+Hoặc, khi workflow đã có trên `main`, bấm **Actions → Publish Docker image (GHCR) → Run workflow** trên nhánh `main` (ra tag `main` + `latest`).
+
+Theo dõi ở tab **Actions**. Cả job amd64 và arm64 phải xanh thì manifest `latest` mới có đủ hai kiến trúc. Build xong thì kiểm tra từ máy:
+
+```bash
+docker manifest inspect ghcr.io/torintran/new-api:latest
+```
+
+Nếu trả về JSON manifest là image đã có. Nếu `denied` thì build chưa xong, hoặc package đang private.
+
+### Bước 3 — cho k3s pull được image
+
+Package mới trên GHCR mặc định **private** → pod sẽ `ImagePullBackOff`.
+
+**Cách 1 (khuyến nghị)** — để public: GitHub → **Packages** → `new-api` → **Package settings** → **Change visibility** → **Public**. Image chỉ chứa binary app, không có secret.
+
+**Cách 2** — giữ private, tạo pull secret:
 
 ```bash
 kubectl -n new-api create secret docker-registry ghcr-pull \
@@ -75,17 +111,35 @@ kubectl -n new-api create secret docker-registry ghcr-pull \
   --docker-password='<PAT có read:packages>'
 ```
 
+Rồi thêm vào `base/deployment.yaml`, dưới `spec.template.spec`:
+
 ```yaml
       imagePullSecrets:
         - name: ghcr-pull
 ```
 
-`imagePullPolicy: Always` để node kéo lại tag `latest`. Khi đã có tag bất biến, sửa `newTag` trong `overlays/prod/kustomization.yaml` và đổi policy thành `IfNotPresent`.
+### Build local (dự phòng)
 
-Kiểm tra trước khi deploy:
+Nếu không dùng CI:
 
 ```bash
-docker manifest inspect ghcr.io/torintran/new-api:latest
+echo "$GHCR_PAT" | docker login ghcr.io -u torintran --password-stdin
+
+docker buildx create --use --name new-api 2>/dev/null || true
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t ghcr.io/torintran/new-api:v1.0.0 \
+  --push .
+```
+
+PAT cần scope `write:packages` + `read:packages`.
+
+Deployment hiện dùng `imagePullPolicy: Always` với tag `latest`, nên lần deploy sau vẫn kéo lại image khi tag không đổi. Nếu sau này bạn pin tag bất biến và đổi policy thành `IfNotPresent`, mỗi lần build lại phải dùng tag mới (ví dụ `v1.0.0-2`), vì policy đó không kéo lại tag cũ.
+
+### Kiểm tra trước khi deploy
+
+```bash
+docker manifest inspect ghcr.io/torintran/new-api:latest > /dev/null && echo "image OK"
 ```
 
 ## 0. Yêu cầu
@@ -317,6 +371,9 @@ Xoá namespace là xoá PVC. Backup trước.
 ## 9. Tóm tắt
 
 ```bash
+# 0. Image: Actions → Publish Docker image (GHCR) → Run workflow trên main
+#    rồi để package public, hoặc tạo ghcr-pull (mục Build & push)
+
 cp deploy/k3s/app-secrets.env.example deploy/k3s/secrets/app-secrets.env
 # sửa PUBLIC_ORIGIN, điền SESSION_SECRET=$(openssl rand -hex 32)
 

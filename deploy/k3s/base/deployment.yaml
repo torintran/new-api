@@ -1,0 +1,140 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: new-api
+  namespace: new-api
+  labels:
+    app.kubernetes.io/name: new-api
+spec:
+  # SQLite trên PVC RWO: chỉ chạy 1 replica.
+  # Không đặt PDB: minAvailable=1 trên 1 replica sẽ chặn drain node.
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: new-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: new-api
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # App chờ stream tối đa SHUTDOWN_TIMEOUT_SECONDS (120) rồi mới thoát.
+      terminationGracePeriodSeconds: 150
+      securityContext:
+        # local-path là hostPath nên fsGroup có thể không được áp dụng.
+        # initContainer bên dưới chown thực tế; fsGroup để dành cho storage khác.
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: fix-data-permissions
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p /data/logs
+              chown -R 65532:65532 /data
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: app
+          # Tag thật được pin trong overlays/prod/kustomization.yaml.
+          image: ghcr.io/torintran/new-api
+          imagePullPolicy: Always
+          args:
+            - --log-dir
+            - /data/logs
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: TZ
+              value: Asia/Ho_Chi_Minh
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ERROR_LOG_ENABLED
+              value: "true"
+            - name: SHUTDOWN_TIMEOUT_SECONDS
+              value: "120"
+            # HTTPS qua Cloudflare Tunnel. Origin phải trùng hostname public.
+            - name: SESSION_COOKIE_SECURE
+              value: "true"
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: new-api-secrets
+                  key: session-secret
+            - name: SESSION_COOKIE_TRUSTED_URL
+              valueFrom:
+                secretKeyRef:
+                  name: new-api-secrets
+                  key: public-origin
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet:
+              path: /api/status
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /api/status
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/status
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: new-api-data
+        - name: tmp
+          emptyDir: {}
